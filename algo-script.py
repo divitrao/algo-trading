@@ -1,11 +1,20 @@
 import os
 from dotenv import load_dotenv
 from growwapi import GrowwAPI
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 load_dotenv()
 import pandas as pd
 
 api_key = os.getenv("groww_token")
 secret = os.getenv("groww_secret")
+
+sender_email = os.getenv("sender_email")
+sender_password = os.getenv("sender_password")
+email_list_str = os.getenv("email_list_to_send")
+email_list = email_list_str.split(",") if email_list_str else []
 
 access_token = GrowwAPI.get_access_token(api_key=api_key,secret=secret)
 # Use access_token to initiate GrowwAPI
@@ -44,6 +53,26 @@ class StrategyNotifier:
     """Handles formatted terminal alerts and notifications for trading signals."""
     
     @staticmethod
+    def send_email(subject, body):
+        if not sender_email or not sender_password or not email_list:
+            return
+        try:
+            s = smtplib.SMTP('smtp.gmail.com', 587)
+            s.starttls()
+            s.login(sender_email, sender_password)
+            for receiver in email_list:
+                msg = MIMEMultipart()
+                msg['From'] = sender_email
+                msg['To'] = receiver
+                msg['Subject'] = subject
+                msg.attach(MIMEText(body, 'plain'))
+                s.send_message(msg)
+            s.quit()
+            print("  📧 Email notification sent successfully!")
+        except Exception as e:
+            print(f"  ❌ Failed to send email: {e}")
+
+    @staticmethod
     def notify_buy(symbol, details, target_price, stop_loss_price):
         print("\n" + "🟢"*30)
         print(f"  [BUY SIGNAL DETECTED]: {symbol}")
@@ -58,6 +87,20 @@ class StrategyNotifier:
         print(f"  🎯 Target (+2.0%)   : ₹{target_price:.2f}")
         print(f"  🛑 Stop Loss (-1.0%): ₹{stop_loss_price:.2f}")
         print("="*60)
+        
+        email_body = f"""BUY SIGNAL DETECTED: {symbol}
+
+Current Close : ₹{details['latest_close']:.2f}
+Prev Close    : ₹{details['prev_close']:.2f}
+% Change      : +{details['pct_change']:.2f}%
+Candle Open   : ₹{details['latest_open']:.2f}
+Volume        : {details['latest_volume']:,}
+Turnover      : ₹{details['turnover']:,.2f}
+
+Target (+2.0%)   : ₹{target_price:.2f}
+Stop Loss (-1.0%): ₹{stop_loss_price:.2f}
+"""
+        StrategyNotifier.send_email(f"Groww Algo Alert: BUY {symbol}", email_body)
 
     @staticmethod
     def notify_sell(symbol, sell_info):
@@ -94,7 +137,6 @@ class GrowwAlgoStrategy:
                 end_time=end_time,
                 interval_in_minutes=1440
             )
-            
             candles = res.get('candles', [])
             if not candles or len(candles) < 21:
                 return None
@@ -201,16 +243,16 @@ class GrowwAlgoStrategy:
                 del self.positions[symbol] # Exit position
                 
             # Check Buy alert
-            is_buy, details = self.evaluate_buy(df)
-            if is_buy:
-                target_price = latest_close * (1 + self.target_pct / 100)
-                sl_price = latest_close * (1 - self.stop_loss_pct / 100)
-                
-                StrategyNotifier.notify_buy(symbol, details, target_price, sl_price)
-                matches.append(symbol)
-                
-                # Add to positions if bought
-                if symbol not in self.positions:
+            if symbol not in self.positions:
+                is_buy, details = self.evaluate_buy(df)
+                if is_buy:
+                    target_price = latest_close * (1 + self.target_pct / 100)
+                    sl_price = latest_close * (1 - self.stop_loss_pct / 100)
+                    
+                    StrategyNotifier.notify_buy(symbol, details, target_price, sl_price)
+                    matches.append(symbol)
+                    
+                    # Add to positions if bought
                     self.positions[symbol] = {
                         'buy_price': latest_close,
                         'target': target_price,
@@ -250,9 +292,38 @@ strategy = GrowwAlgoStrategy(groww, target_pct=2.0, stop_loss_pct=1.0)
 
 # Watchlist of liquid NSE stocks to monitor
 watchlist = [
-    "RELIANCE", "TCS", "INFY", "TATAMOTORS", "HDFCBANK",
-    "ICICIBANK", "BHARTIARTL", "SBIN", "LT", "ITC",
-    "AXISBANK", "KOTAKBANK", "M&M", "SUNPHARMA", "NTPC"
+    "RELIANCE", "BHARTIARTL", "HDFCBANK", "ICICIBANK", "SBIN",
+    "TCS", "BAJFINANCE", "LT", "HINDUNILVR", "TITAN",
+    "SUNPHARMA", "INFY", "KOTAKBANK", "ADANIENT", "ADANIPORTS",
+    "M&M", "MARUTI", "AXISBANK", "ITC", "HCLTECH",
+    "NTPC", "ULTRACEMCO", "BAJAJ-AUTO", "BAJAJFINSV", "JSWSTEEL",
+    "ETERNAL", "BEL", "ONGC", "POWERGRID", "DIVISLAB",
+    "SHRIRAMFIN", "TATASTEEL", "GRASIM", "HINDALCO", "INDIGO",
+    "SBILIFE", "WIPRO", "JIOFIN", "TECHM", "TRENT",
+    "APOLLOHOSP", "LTM", "MAXHEALTH", "HDFCLIFE", "TMPV",
+    "CIPLA", "DRREDDY", "TATACONSUM", "NESTLEIND", "EICHERMOT",
+    # next 50
+    "HAL", "HINDZINC", "DMART", "SOLARINDS", "ADANIGREEN",
+    "ADANIPOWER", "TVSMOTOR", "IOC", "TORNTPHARM", "HYUNDAI",
+    "MOTHERSON", "ADANIENSOL", "TMCV", "DLF", "PIDILITIND",
+    "CHOLAFIN", "ABB", "TATACAP", "CGPOWER", "SIEMENS",
+    "CUMMINSIND", "BOSCHLTD", "VBL", "UNIONBANK", "BPCL",
+    "PNB", "BAJAJHLDNG", "BANKBARODA", "ENRIN", "CANBK",
+    "MUTHOOTFIN", "ZYDUSLIFE", "LODHA", "TATAPOWER", "GAIL",
+    "JINDALSTEL", "HDFCAMC", "VEDL", "INDHOTEL", "UNITDSPR",
+    "MAXHEALTH", "IRFC", "PFC", "AMBUJACEM", "GODREJCP",
+    "MAZDOCK", "RECLTD", "SHREECEM", "BRITANNIA", "BAJAJHLDNG",
+    # next fifty
+    "ADANIPOWER", "HAL", "DIVISLAB", "HINDZINC", "DMART",
+    "ADANIGREEN", "SOLARINDS", "TVSMOTOR", "IOC", "TORNTPHARM",
+    "HYUNDAI", "MOTHERSON", "ADANIENSOL", "CHOLAFIN", "PIDILITIND",
+    "DLF", "TMCV", "ABB", "TATACAP", "CGPOWER",
+    "BOSCHLTD", "VBL", "CUMMINSIND", "SIEMENS", "UNIONBANK",
+    "BPCL", "PNB", "BAJAJHLDNG", "BANKBARODA", "TATAPOWER",
+    "PFC", "ENRIN", "CANBK", "MUTHOOTFIN", "ZYDUSLIFE",
+    "LODHA", "IRFC", "VEDL", "HDFCAMC", "INDHOTEL",
+    "UNITDSPR", "AMBUJACEM", "MAZDOCK", "GODREJCP", "SHREECEM",
+    "LTM", "BRITANNIA", "GAIL", "JINDALSTEL", "RECLTD"
 ]
 
 # OPTION 1: Single scan iteration
