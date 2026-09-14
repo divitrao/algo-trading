@@ -127,6 +127,7 @@ class GrowwAlgoStrategy:
         """Fetches daily candle data from Groww API."""
         try:
             end_time = int(time.time() * 1000)
+            print(end_time,"UEUEUEUU")
             start_time = end_time - (days * 24 * 60 * 60 * 1000)
             
             res = self.groww.get_historical_candle_data(
