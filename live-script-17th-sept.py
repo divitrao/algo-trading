@@ -19,6 +19,7 @@ import collections
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -46,6 +47,12 @@ print("🔑 Authenticating with Groww API...")
 access_token = GrowwAPI.get_access_token(api_key=api_key, secret=secret)
 groww = GrowwAPI(access_token)
 print("✅ Authenticated successfully!\n")
+
+
+# ==============================================================================
+# TIMEZONE — always use IST regardless of server system timezone (e.g. UTC on UAT)
+# ==============================================================================
+IST_TZ = ZoneInfo("Asia/Kolkata")
 
 
 # ==============================================================================
@@ -169,7 +176,7 @@ class Notifier:
         Every email event for the same stock (BUY, SL move, SELL, force-exit)
         uses this subject so they all thread in a single mailbox conversation.
         """
-        date_str = datetime.now().strftime("%d %b %Y")  # e.g. "17 Sep 2026"
+        date_str = datetime.now(IST_TZ).strftime("%d %b %Y")  # e.g. "17 Sep 2026" always in IST
         return f"[Paper Trading] {symbol} — {date_str}"
 
     @staticmethod
@@ -228,7 +235,7 @@ class Notifier:
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"  🔒 SL MOVED TO BREAK-EVEN\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Time              : {datetime.now().strftime('%H:%M:%S')}\n"
+            f"Time              : {datetime.now(IST_TZ).strftime('%H:%M:%S')}\n"
             f"Entry Price       : ₹{pos.entry_price:.2f}\n"
             f"Previous SL       : ₹{old_sl:.2f}\n"
             f"New SL (Break-even): ₹{pos.entry_price:.2f}\n"
@@ -247,7 +254,7 @@ class Notifier:
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"  📈 TRAILING SL UPGRADED\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Time              : {datetime.now().strftime('%H:%M:%S')}\n"
+            f"Time              : {datetime.now(IST_TZ).strftime('%H:%M:%S')}\n"
             f"Entry Price       : ₹{pos.entry_price:.2f}\n"
             f"Highest Since Entry: ₹{pos.highest_price_since_entry:.2f}  (+{pnl_pct:.2f}%)\n"
             f"Previous SL       : ₹{old_sl:.2f}\n"
@@ -273,7 +280,7 @@ class Notifier:
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"  {emoji} POSITION CLOSED — {record['exit_reason']}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"Exit Time         : {datetime.now().strftime('%H:%M:%S')}\n"
+            f"Exit Time         : {datetime.now(IST_TZ).strftime('%H:%M:%S')}\n"
             f"Entry Price       : ₹{record['entry_price']:.2f}\n"
             f"Initial SL        : ₹{record['initial_sl']:.2f}\n"
             f"Exit Price        : ₹{record['exit_price']:.2f}\n"
@@ -285,7 +292,7 @@ class Notifier:
 
     @staticmethod
     def eod_summary(history: List[dict]):
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now(IST_TZ).strftime("%Y-%m-%d")
         total    = len(history)
         wins     = sum(1 for t in history if t["pnl_rs"] >= 0)
         losses   = total - wins
@@ -361,7 +368,7 @@ class PositionMonitor:
             "pnl_pct":      pnl_pct,
             "exit_reason":  reason,
             "entry_ts":     pos.entry_timestamp,
-            "exit_ts":      datetime.now(),
+            "exit_ts":      datetime.now(IST_TZ),
         }
         self.state.trade_history.append(record)
         # Store exit price so scanner can enforce the +1% re-entry cooldown
@@ -395,7 +402,7 @@ class PositionMonitor:
             return False
 
         pos = self.state.position
-        now = datetime.now()
+        now = datetime.now(IST_TZ)
 
         current_price = self.get_ltp(pos.groww_symbol)
         if current_price is None or current_price <= 0:
@@ -519,7 +526,7 @@ class MarketScanner:
         Batch-scans all stocks with OHLC + LTP.
         Classifies into Strong / Medium / Inactive tiers.
         """
-        print(f"\n🌐 [{datetime.now().strftime('%H:%M:%S')}] Full Market Sweep — {len(self.all_symbols)} stocks...")
+        print(f"\n🌐 [{datetime.now(IST_TZ).strftime('%H:%M:%S')}] Full Market Sweep — {len(self.all_symbols)} stocks...")
         ohlc = self._fetch_batch_ohlc(self.all_symbols)
         ltp  = self._fetch_batch_ltp(self.all_symbols)
 
@@ -563,7 +570,7 @@ class MarketScanner:
         Fetches 15-min candles going back 7 days to ensure SMA(50) is calculable.
         Returns None if data is insufficient — caller must skip. No fallbacks.
         """
-        now_dt = datetime.now()
+        now_dt = datetime.now(IST_TZ)
         end_time   = now_dt.strftime("%Y-%m-%d %H:%M:%S")
         start_time = (now_dt - timedelta(days=7)).strftime("%Y-%m-%d 09:15:00")
         rate_limiter.wait_if_needed()
@@ -723,7 +730,7 @@ class PaperTrader:
             current_stop_loss         = sl,
             target_price              = tgt,
             highest_price_since_entry = entry,
-            entry_timestamp           = datetime.now(),
+            entry_timestamp           = datetime.now(IST_TZ),
         )
         self.state.position = pos
 
@@ -761,11 +768,11 @@ def run_live_loop():
     try:
         while True:
             now_ts = time.time()
-            now_dt = datetime.now()
+            now_dt = datetime.now(IST_TZ)
            
             # ── Block new entries after 15:10 ─────────────────────────────────
-            force_exit_dt = now_dt.replace(hour=FORCE_EXIT_HOUR, minute=FORCE_EXIT_MIN, second=0, microsecond=0)
-            print(now_dt,"sadsdasdsad",force_exit_dt)
+            force_exit_dt = now_dt.replace(hour=FORCE_EXIT_HOUR, minute=FORCE_EXIT_MIN, second=0, microsecond=0, tzinfo=IST_TZ)
+            print("now_dt",now_dt,"force_exit_dt",force_exit_dt)
             if now_dt >= force_exit_dt:
                 state.new_entry_blocked = True
 
