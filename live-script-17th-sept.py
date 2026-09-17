@@ -75,7 +75,7 @@ EOD_SUMMARY_HOUR, EOD_SUMMARY_MIN = 15, 25  # 15:25 IST — EOD email
 FULL_SWEEP_INTERVAL_SEC  = 180   # 3 minutes
 MEDIUM_POLL_INTERVAL_SEC = 40    # 40 seconds
 STRONG_POLL_INTERVAL_SEC = 8     # 8 seconds
-MONITOR_LTP_INTERVAL_SEC = 5     # 5 seconds — open position LTP poll
+MONITOR_LTP_INTERVAL_SEC = 2     # 5 seconds — open position LTP poll
 
 
 # ==============================================================================
@@ -713,6 +713,27 @@ class PaperTrader:
                 return False
 
         entry = details["latest_close"]
+
+        # ── Upper-circuit guard ───────────────────────────────────────────────
+        # A stock at its upper circuit has no sellers; buying is impossible.
+        # Skip the entry if current price == upper_circuit_limit.
+        try:
+            rate_limiter.wait_if_needed()
+            trading_symbol = groww_symbol.replace("NSE-", "")
+            quote = groww.get_quote(
+                trading_symbol=trading_symbol,
+                exchange=groww.EXCHANGE_NSE,
+                segment=groww.SEGMENT_CASH
+            )
+            uc_limit = quote.get("upper_circuit_limit")
+            if uc_limit is not None and abs(entry - float(uc_limit)) < 0.01:
+                print(f"  🚫 [{symbol}] Upper circuit hit — price ₹{entry:.2f} == "
+                      f"upper circuit ₹{float(uc_limit):.2f}. Skipping entry.")
+                return False
+        except Exception as e:
+            print(f"  ⚠️ [{symbol}] Could not fetch quote for UC check ({e}). Proceeding with caution.")
+        # ─────────────────────────────────────────────────────────────────────
+
         sl    = entry * (1 - INITIAL_SL_PCT)
         tgt   = entry * (1 + TARGET_PCT)
         qty   = compute_qty(entry, sl, lot_size)
