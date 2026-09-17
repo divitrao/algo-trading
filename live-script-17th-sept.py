@@ -772,7 +772,6 @@ def run_live_loop():
            
             # ── Block new entries after 15:10 ─────────────────────────────────
             force_exit_dt = now_dt.replace(hour=FORCE_EXIT_HOUR, minute=FORCE_EXIT_MIN, second=0, microsecond=0, tzinfo=IST_TZ)
-            print("now_dt",now_dt,"force_exit_dt",force_exit_dt)
             if now_dt >= force_exit_dt:
                 state.new_entry_blocked = True
 
