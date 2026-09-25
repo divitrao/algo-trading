@@ -29,10 +29,13 @@ Flow:
 import csv
 import math
 import os
+import smtplib
 import time
 import collections
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta, time as dt_time
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import List, Dict, Optional
 from zoneinfo import ZoneInfo
 
@@ -46,8 +49,12 @@ load_dotenv()
 # ==============================================================================
 # ENVIRONMENT & AUTHENTICATION
 # ==============================================================================
-api_key = os.getenv("groww_token")
-secret  = os.getenv("groww_secret")
+api_key         = os.getenv("groww_token")
+secret          = os.getenv("groww_secret")
+sender_email    = os.getenv("sender_email")
+sender_password = os.getenv("sender_password")
+email_list_str  = os.getenv("email_list_to_send")
+email_list      = email_list_str.split(",") if email_list_str else []
 
 if not api_key or not secret:
     raise ValueError("Missing groww_token or groww_secret in .env file!")
@@ -521,6 +528,125 @@ def log_trade(trade: ActiveTrade, exit_price: float, exit_reason: str):
 
 
 # ==============================================================================
+# NOTIFIER  (identical pattern to live-script-21st-sept.py)
+# ==============================================================================
+class Notifier:
+    @staticmethod
+    def _subject(symbol):
+        date_str = datetime.now(IST_TZ).strftime("%d %b %Y")
+        return f"[Paper Short] {symbol} -- {date_str}"
+
+    @staticmethod
+    def _send_email(subject, body):
+        if not sender_email or not sender_password or not email_list:
+            return
+        try:
+            s = smtplib.SMTP("smtp.gmail.com", 587)
+            s.starttls()
+            s.login(sender_email, sender_password)
+            for receiver in email_list:
+                msg            = MIMEMultipart()
+                msg["From"]    = sender_email
+                msg["To"]      = receiver
+                msg["Subject"] = subject
+                msg.attach(MIMEText(body, "plain"))
+                s.send_message(msg)
+            s.quit()
+            print("  Email sent.")
+        except Exception as e:
+            print(f"  Email failed: {e}")
+
+    @staticmethod
+    def short_entry(trade: "ActiveTrade"):
+        """Email on paper short entry."""
+        trail_step = ATR_TRAIL_MULTIPLIER * trade.atr_value
+        body = (
+            f"[Paper Trading] SHORT ENTRY\n"
+            f"Time              : {trade.entry_time.strftime('%H:%M:%S')}\n"
+            f"Symbol            : {trade.symbol}\n"
+            f"Setup             : {trade.setup}\n"
+            f"Entry Price       : {trade.entry_price:.2f}\n"
+            f"Quantity          : {trade.quantity}\n"
+            f"Capital Deployed  : {trade.capital:,.2f}\n"
+            f"Initial SL        : {trade.initial_sl:.2f}\n"
+            f"Target (2R)       : {trade.target:.2f}\n"
+            f"ATR               : {trade.atr_value:.2f}\n"
+            f"Trail Step        : {ATR_TRAIL_MULTIPLIER} x ATR = {trail_step:.2f}\n"
+            f"Volatility        : {trade.volatility}\n"
+        )
+        Notifier._send_email(Notifier._subject(trade.symbol), body)
+
+    @staticmethod
+    def trailing_sl_updated(symbol: str, old_sl: float, new_sl: float, lowest: float):
+        """Email when trailing SL tightens."""
+        body = (
+            f"[Paper Trading] TRAILING SL UPDATED\n"
+            f"Time              : {datetime.now(IST_TZ).strftime('%H:%M:%S')}\n"
+            f"Symbol            : {symbol}\n"
+            f"Previous SL       : {old_sl:.2f}\n"
+            f"New SL            : {new_sl:.2f}\n"
+            f"Lowest Price Seen : {lowest:.2f}\n"
+        )
+        Notifier._send_email(Notifier._subject(symbol), body)
+
+    @staticmethod
+    def exit(trade: "ActiveTrade", exit_price: float, reason: str,
+             pnl_inr: float, pnl_pct: float):
+        """Email on position close."""
+        sign = "+" if pnl_inr >= 0 else ""
+        body = (
+            f"[Paper Trading] POSITION CLOSED -- {reason}\n"
+            f"Exit Time         : {datetime.now(IST_TZ).strftime('%H:%M:%S')}\n"
+            f"Symbol            : {trade.symbol}\n"
+            f"Setup             : {trade.setup}\n"
+            f"Entry Price       : {trade.entry_price:.2f}\n"
+            f"Exit Price        : {exit_price:.2f}\n"
+            f"Quantity          : {trade.quantity}\n"
+            f"Initial SL        : {trade.initial_sl:.2f}\n"
+            f"Final SL          : {trade.current_sl:.2f}\n"
+            f"Target            : {trade.target:.2f}\n"
+            f"Lowest Seen       : {trade.lowest_price_seen:.2f}\n"
+            f"P&L               : {sign}{pnl_inr:.2f}  ({sign}{pnl_pct:.2f}%)\n"
+        )
+        Notifier._send_email(Notifier._subject(trade.symbol), body)
+
+    @staticmethod
+    def eod_summary(history: list, total_pnl: float):
+        """Email end-of-day summary."""
+        date_str  = datetime.now(IST_TZ).strftime("%Y-%m-%d")
+        total     = len(history)
+        wins      = sum(1 for t in history if t["pnl_inr"] >= 0)
+        losses    = total - wins
+        sign      = "+" if total_pnl >= 0 else ""
+
+        rows = []
+        for i, t in enumerate(history, 1):
+            s = "+" if t["pnl_inr"] >= 0 else ""
+            rows.append(
+                f"  #{i:02d}  {t['symbol']:<12}  "
+                f"IN {t['entry_price']:>8.2f}  "
+                f"OUT {t['exit_price']:>8.2f}  "
+                f"QTY {t['quantity']:>4}  "
+                f"P&L {s}{t['pnl_inr']:>8.2f} ({s}{t['pnl_pct']:.2f}%)  "
+                f"[{t['exit_reason']}]"
+            )
+
+        body_detail = "\n".join(rows) if history else "No trades were taken today."
+        body = (
+            f"PAPER SHORT BOT EOD SUMMARY -- {date_str}\n"
+            f"{'='*60}\n"
+            f"Total Trades : {total}\n"
+            f"Winners      : {wins}  |  Losers: {losses}\n"
+            f"Total P&L    : {sign}{total_pnl:,.2f}\n\n"
+            f"Trade Log:\n{body_detail}\n"
+        )
+        Notifier._send_email(
+            f"[Paper Short] EOD Summary {date_str} -- P&L {sign}{total_pnl:,.2f}",
+            body,
+        )
+
+
+# ==============================================================================
 # PAPER TRADING ENGINE
 # ==============================================================================
 
@@ -786,6 +912,7 @@ class PaperShortBot:
         print("=" * 60)
         print("  [PAPER] No real order placed -- position tracked in-memory.")
         print("  [INFO]  Switching to 1-second LTP monitoring only...\n")
+        Notifier.short_entry(self.active_trade)
 
     # --------------------------------------------------------------------------
     # TRAILING STOP LOSS UPDATE
@@ -819,6 +946,9 @@ class PaperShortBot:
                 f"  [TrailSL] {trade.symbol} | "
                 f"Lowest: {trade.lowest_price_seen:.2f} | "
                 f"SL: {old_sl:.2f} -> {new_sl:.2f}"
+            )
+            Notifier.trailing_sl_updated(
+                trade.symbol, old_sl, new_sl, trade.lowest_price_seen
             )
 
     # --------------------------------------------------------------------------
@@ -931,6 +1061,7 @@ class PaperShortBot:
         print(f"  Lowest Seen   : {trade.lowest_price_seen:.2f}")
         print("=" * 60 + "\n")
 
+        Notifier.exit(trade, exit_price, reason, pnl_inr, pnl_pct)
         self.active_trade = None
 
     # --------------------------------------------------------------------------
@@ -963,6 +1094,7 @@ class PaperShortBot:
                 f"[{t['exit_reason']}]"
             )
         print("=" * 70)
+        Notifier.eod_summary(self.trade_history, total_pnl)
 
     # --------------------------------------------------------------------------
     # MAIN LOOP
